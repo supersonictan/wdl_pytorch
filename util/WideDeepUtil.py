@@ -1,6 +1,10 @@
+import numpy as np
 from sklearn.model_selection import train_test_split
+from torch import Tensor
 
 from preprocessing.WideDeepDataset import WideDeepDataset
+
+
 
 
 def _train_val_split(self, X_wide=None, X_deep=None, X_text=None, X_img=None, X_train=None, X_val=None, val_split=None, target=None):
@@ -66,8 +70,7 @@ def _train_val_split(self, X_wide=None, X_deep=None, X_text=None, X_img=None, X_
                 if "X_img" in X_train.keys():
                     X_img = X_train["X_img"]
 
-            (X_tr_wide, X_val_wide, X_tr_deep, X_val_deep, y_tr, y_val) = train_test_split(
-                X_wide, X_deep, target, test_size=val_split, random_state=self.seed,
+            (X_tr_wide, X_val_wide, X_tr_deep, X_val_deep, y_tr, y_val) = train_test_split(X_wide, X_deep, target, test_size=val_split, random_state=self.seed,
                 stratify=target if self.method != "regression" else None,
             )
             X_train = {"X_wide": X_tr_wide, "X_deep": X_tr_deep, "target": y_tr}

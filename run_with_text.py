@@ -17,7 +17,7 @@ import torch
 
 embedding_path = '/Users/tanzhen/Desktop/pai_pytorch/data/embedding_SougouNews.npz'
 traindata_path = '/Users/tanzhen/Desktop/pai_pytorch/data/adult_train_bak.csv'
-summary_path = '/Users/tanzhen/Desktop/code/wdl_pytorch/log/without_text'
+summary_path = '/Users/tanzhen/Desktop/code/wdl_pytorch/log'
 
 
 if __name__ == '__main__':
@@ -55,25 +55,36 @@ if __name__ == '__main__':
      [ 2. 1. 1. 1. 1. 0.9675134 -2.0520001]]
     """
 
+    # lstm 输入
+    prepare_text = DeepTextPreprocessor(text_cols_list=text_cols, pad_size=16, vocab_path='/Users/tanzhen/Desktop/pai_pytorch/data/vocab.pkl')
+    X_text = prepare_text.fit_transform(df)
+    """
+    [[  66  440 4761 4761 4761 4761 4761 4761 4761 4761 4761 4761 4761 4761 4761 4761]
+     [   5  440 4761 4761 4761 4761 4761 4761 4761 4761 4761 4761 4761 4761 4761 4761]]
+    """
+
     # Build model
     wide = Wide(wide_dim=X_wide.shape[1], output_dim=1)
     deepdense = DeepDense(hidden_layers=[64, 32], dropout=[0.2, 0.2], deep_column_idx=prepare_deep.deep_column_idx, embed_input=prepare_deep.emb_col_val_dim_tuple, continuous_cols=continuous_cols)
-    wide_deep_model = WideDeep(wide=wide, deepdense=deepdense)
+    lstm = TextLSTM(embedding_path)
+    wide_deep_model = WideDeep(wide=wide, deepdense=deepdense, deeptext=lstm)
 
     # 1.设定 optimizer ==> 2.Init 子 model 各层种参数 ==> 3.StepLR
     wide_opt = torch.optim.Adam(wide_deep_model.wide.parameters())
+    text_opt = torch.optim.Adam(wide_deep_model.deeptext.parameters())
     deep_opt = RAdam(wide_deep_model.deepdense.parameters())
 
     wide_sch = torch.optim.lr_scheduler.StepLR(wide_opt, step_size=3)
     deep_sch = torch.optim.lr_scheduler.StepLR(deep_opt, step_size=5)
+    text_sch = torch.optim.lr_scheduler.StepLR(text_opt, step_size=5)
 
-    optimizers = {"wide": wide_opt, "deepdense": deep_opt}
-    schedulers = {"wide": wide_sch, "deepdense": deep_sch}
-    initializers = {"wide": KaimingNormal, "deepdense": XavierNormal}
+    optimizers = {"wide": wide_opt, "deepdense": deep_opt, 'deeptext': text_opt}
+    schedulers = {"wide": wide_sch, "deepdense": deep_sch, 'deeptext': text_sch}
+    initializers = {"wide": KaimingNormal, "deepdense": XavierNormal, 'deeptext': KaimingNormal}
 
     wide_deep_model.compile(method='binary', optimizers_dic=optimizers, lr_schedulers_dic=schedulers, initializers_dic=initializers)
 
-    wide_deep_model.fit(X_wide=X_wide, X_deep=X_deep, target=target, n_epochs=10, batch_size=128,val_split=0.2, summary_path=summary_path)
+    wide_deep_model.fit(X_wide=X_wide, X_deep=X_deep, X_text=X_text, target=target, n_epochs=10, batch_size=128,val_split=0.2, summary_path=summary_path)
 
 
 

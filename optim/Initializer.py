@@ -18,11 +18,12 @@ class XavierNormal(Initializer):
 
     def __call__(self, submodel: nn.Module):
         for n, p in submodel.named_parameters():
-            print("ParameterName: " + n)
-            if "bias" in n:
-                nn.init.constant_(p, val=0)
-            elif p.requires_grad:
-                nn.init.xavier_normal_(p, gain=self.gain)
+            print("init {}".format(n))
+            if re.search(self.pattern, n) and 'word_embed' not in n:
+                if "bias" in n:
+                    nn.init.constant_(p, val=0)
+                elif p.requires_grad:
+                    nn.init.xavier_normal_(p, gain=self.gain)
 
 
 
@@ -36,7 +37,7 @@ class KaimingNormal(Initializer):
 
     def __call__(self, submodel: nn.Module):
         for n, p in submodel.named_parameters():
-            print("ParameterName: " + n)
+            print("init {}".format(n))
             if "bias" in n:
                 nn.init.constant_(p, val=0)
             elif p.requires_grad:

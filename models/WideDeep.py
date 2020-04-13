@@ -1,3 +1,4 @@
+import warnings
 
 import numpy as np
 import os
@@ -8,6 +9,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import (List, Union, Dict, Optional, Tuple)
+
+from tensorboardX import SummaryWriter
 from torch import Tensor
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import _LRScheduler
@@ -18,6 +21,7 @@ from util.WideDeepUtil import _train_val_split
 
 use_cuda = torch.cuda.is_available()
 n_cpus = os.cpu_count()
+#n_cpus = 1
 
 
 
@@ -69,9 +73,9 @@ class WideDeep(nn.Module):
                 if self.deepimage is not None:
                     self.deepimage = nn.Sequential(self.deepimage, nn.Linear(self.deepimage.output_dim, output_dim))
 
-        print("\nNetwork Structure:")
-        print(self)
-        print("\n")
+        # print("\nNetwork Structure:")
+        # print(self)
+        # print("\n")
 
 
     def forward(self, X: Dict[str, Tensor]) -> Tensor:
@@ -96,15 +100,12 @@ class WideDeep(nn.Module):
             return out
 
     # 设置训练时用的参数
-    def compile(self, method, optimizers_dic=None, lr_schedulers_dic=None, initializers_dic=None, callbacks=None, metrics=None,
-                with_focal_loss=False, alpha=0.25, gamma=2, verbose=1, seed=1):
+    def compile(self, method, optimizers_dic=None, lr_schedulers_dic=None, initializers_dic=None, with_focal_loss=False, alpha=0.25, gamma=2, verbose=1, seed=1, class_weight: Optional[Union[float, List[float], Tuple[float]]] = None):
         """
         :param method:                          str
         :param optimizers_dic:                  Dict[str, Optimizer]
         :param lr_schedulers_dic:               Dict[str, _LRScheduler]
         :param initializers_dic:                Dict[str, Initializer]
-        :param callbacks:                       List[Callback]
-        :param metrics:                         List[Metric]
         :param with_focal_loss:                 bool
         :param alpha:
         :param gamma:
@@ -121,96 +122,80 @@ class WideDeep(nn.Module):
         if self.with_focal_loss:
             self.alpha, self.gamma = alpha, gamma
 
+        if isinstance(class_weight, float):
+            self.class_weight = torch.tensor([1.0 - class_weight, class_weight])
+        elif isinstance(class_weight, (tuple, list)):
+            self.class_weight = torch.tensor(class_weight)
+        else:
+            self.class_weight = None
 
-        # Init 各子模型参数 e.g. {"wide": KaimingNormal(), "deepdense": XavierNormal()}
         if initializers_dic is not None:
+            # Init 各子模型参数 e.g. {"wide": KaimingNormal(), "deepdense": XavierNormal()}
             # 实例化
             instantiated_initializers = {}
             for model_name, initializer in initializers_dic.items():
+                print("model:{} ParamInitializer:{}".format(model_name, str(initializer)))
                 instantiated_initializers[model_name] = initializer()
 
             # 遍历 WideDeep 的子模型. wide==>nn.Module deepdense==>nn.Module etc.
-            for sub_model_name, sub_nn_module in self.named_children():
-                instantiated_initializers[sub_model_name](sub_nn_module)
+            for name, child in self.named_children():
+                print("\nstart init {} param.....".format(name))
+                instantiated_initializers[name](child)
 
-        # Valid optimizer e.g. {"wide": torch.optim.Adam, "deepdense": RAdam}
         if optimizers_dic is not None:
+            # Valid optimizer e.g. self.optimizer_dic = {"wide": torch.optim.Adam, "deepdense": RAdam}
+            print("\n")
+            for model_name, opt in optimizers_dic.items():
+                print("model:{0:>1}     optimizer:{1}".format(model_name, opt.__class__.__name__))
+
             opt_names = list(optimizers_dic.keys())
             mod_names = [n for n, c in self.named_children()]
+
             for mn in mod_names:
                 assert mn in opt_names, "No optimizer found for {}".format(mn)
-            self.optimizer_dic = optimizers_dic
+                self.optimizer_dic = optimizers_dic
 
-        # https://blog.csdn.net/Strive_For_Future/article/details/83213971
         if lr_schedulers_dic is not None:
-            if isinstance(lr_schedulers_dic, _LRScheduler):
-                self.lr_scheduler: Union[
-                    _LRScheduler, MultipleLRScheduler
-                ] = lr_schedulers_dic
-                self.cyclic = "cycl" in self.lr_scheduler.__class__.__name__.lower()
-            elif len(lr_schedulers_dic) > 1:
-                self.lr_scheduler = MultipleLRScheduler(lr_schedulers_dic)
-                # [steplr, steplr]
-                scheduler_names = [
-                    sc.__class__.__name__.lower()
-                    for _, sc in self.lr_scheduler._schedulers.items()
-                ]
-                self.cyclic = any(["cycl" in sn for sn in scheduler_names])
-        else:
-            self.lr_scheduler, self.cyclic = None, False
-
-        self.history = History()
-        self.callbacks: List = [self.history]
-        """
-        callbacks = [
-            LRHistory(n_epochs=10),
-            EarlyStopping,
-            ModelCheckpoint(filepath="model_weights/wd_out"),
-        ]
-        """
-        if callbacks is not None:
-            for callback in callbacks:
-                if isinstance(callback, type):
-                    callback = callback()
-                self.callbacks.append(callback)
-
-        if metrics is not None:
-            self.metric = MultipleMetrics(metrics)
-            self.callbacks += [MetricCallback(self.metric)]
-        else:
-            self.metric = None
-
-        self.callback_container = CallbackContainer(self.callbacks)
-        self.callback_container.set_model(self)
+            # self.lr_schedulers_dic = {"wide": torch.optim.lr_scheduler.StepLR, "deepdense": torch.optim.lr_scheduler.StepLR}
+            # https://blog.csdn.net/Strive_For_Future/article/details/83213971
+            self.lr_schedulers_dic = lr_schedulers_dic
+            sc_name_list = [sc.__class__.__name__.lower() for model_name, sc in self.lr_schedulers_dic.items()]
+            self.cyclic = any(["cycl" in sn for sn in sc_name_list])
 
         if use_cuda:
             print("use cuda!")
             self.cuda()
 
-    def fit(self,
-        X_wide: Optional[np.ndarray] = None,
-        X_deep: Optional[np.ndarray] = None,
-        X_text: Optional[np.ndarray] = None,
-        X_img: Optional[np.ndarray] = None,
-        X_train: Optional[Dict[str, np.ndarray]] = None,
-        X_val: Optional[Dict[str, np.ndarray]] = None,
-        val_split: Optional[float] = None,
-        target: Optional[np.ndarray] = None,
-        n_epochs: int = 1,
-        validation_freq: int = 1,
-        batch_size: int = 32,
-        patience: int = 10,
-        warm_up: bool = False,
-        warm_epochs: int = 4,
-        warm_max_lr: float = 0.01,
-        warm_deeptext_gradual: bool = False,
-        warm_deeptext_max_lr: float = 0.01,
-        warm_deeptext_layers: Optional[List[nn.Module]] = None,
-        warm_deepimage_gradual: bool = False,
-        warm_deepimage_max_lr: float = 0.01,
-        warm_deepimage_layers: Optional[List[nn.Module]] = None,
-        warm_routine: str = "howard",
+    # TODO: Metrics, EarlyStopping, ModelCheckpoint, EachModel-LR
+    # TODO: DeepDense参数改为 batchnorm 会报错
+    def fit(self, X_wide=None, X_deep=None, X_text=None, X_img=None, X_train=None, X_val=None, val_split=None, target=None, n_epochs=1, validation_freq=1, batch_size=256,
+            summary_path='log/',
+        warm_up=False, warm_epochs=4, warm_max_lr=0.01,
+        warm_deeptext_gradual=False,warm_deeptext_max_lr=0.01,warm_deeptext_layers=None,warm_deepimage_gradual=False,warm_deepimage_max_lr=0.01,warm_deepimage_layers=None,warm_routine="howard"
     ):
+        """
+        :param X_wide:                              np.ndarray
+        :param X_deep:                              np.ndarray
+        :param X_text:                              np.ndarray
+        :param X_img:                               np.ndarray
+        :param X_train:                             Dict[str, np.ndarray]
+        :param X_val:                               Dict[str, np.ndarray]
+        :param val_split:                           float
+        :param target:                              np.ndarray
+        :param n_epochs:                            int
+        :param validation_freq:                     int
+        :param batch_size:
+        :param warm_up:                             bool
+        :param warm_epochs:                         int
+        :param warm_max_lr:                         float
+        :param warm_deeptext_gradual:               bool
+        :param warm_deeptext_max_lr:                float
+        :param warm_deeptext_layers:                List[nn.Module]
+        :param warm_deepimage_gradual:              bool
+        :param warm_deepimage_max_lr:               float
+        :param warm_deepimage_layers:               List[nn.Module]
+        :return:
+        """
 
         if X_train is None and (X_wide is None or X_deep is None or target is None):
             raise ValueError("Training data is missing")
@@ -235,91 +220,166 @@ class WideDeep(nn.Module):
                 warm_deepimage_max_lr,
                 warm_routine,
             )
-        train_steps = len(train_loader)
-        self.callback_container.on_train_begin(
-            {"batch_size": batch_size, "train_steps": train_steps, "n_epochs": n_epochs}
-        )
-        if self.verbose:
-            print("Training")
 
         dev_best_loss = float('inf')
         batch_num = 0  # 记录训练了第几个batch
-        writer = SummaryWriter(log_dir='../../log/wdl' + '/' + time.strftime('%m-%d_%H.%M', time.localtime()))
+        writer = SummaryWriter(log_dir=summary_path + '/' + time.strftime('%m-%d_%H.%M', time.localtime()))
         for epoch in range(n_epochs):
             # train step...
             epoch_logs: Dict[str, float] = {}
-            self.callback_container.on_epoch_begin(epoch, logs=epoch_logs)
+            # self.callback_container.on_epoch_begin(epoch, logs=epoch_logs)
             self.train_running_loss = 0.0
             print('Epoch [{}/{}]'.format(epoch + 1, n_epochs))
 
             for batch_idx, (data, target) in enumerate(train_loader):
-                acc, train_loss, loss_tensors = self._training_step(data, target, batch_idx)
                 batch_num += 1
+                self.train()
+                X = {k: v.cuda() for k, v in data.items()} if use_cuda else data
+                y = target.float() if self.method != "multiclass" else target
+                y = y.cuda() if use_cuda else y
+
+                # 梯度置零
+                for _, op in self.optimizer_dic.items():
+                    op.zero_grad()
+
+                # 预测值
+                y_pred = self._activation_fn(self.forward(X))
+
+                # cal loss and accurate
+                train_loss = self._cal_loss_and_backprop(y_pred, y)
+
+                if batch_num % 100 == 0:
+                    train_acc = self._cal_binary_accuracy(y_pred, y)
+                    writer.add_scalar("loss/train", train_loss.item(), batch_num)
+                    writer.add_scalar("acc/train", train_acc, batch_num)
+
+                    # msg = 'Iter: {0:>6},  Train Loss: {1:>5.2},  Train Acc: {2:>6.2%},  Val Loss: {3:>5.2},  Val Acc: {4:>6.2%}'
+                    msg = 'Iter: {0:>6},  Train Loss: {1:>5.2},  Train Acc: {2:>6.2%}'
+                    print(msg.format(batch_num, train_loss.item(), train_acc))
+
+                # ---------------OLD
+                # acc, train_loss, loss_tensors = self._training_step(data, target, batch_idx)
+                # batch_num += 1
+                #
+                #
+                # if batch_num % 30 == 0:
+                #     # msg = "Iter:{}  Train Loss:{}  acc:{}"
+                #     writer.add_scalar("loss/train", train_loss, batch_num)
+                #     writer.add_scalar("acc/train", acc['acc'], batch_num)
+                #
+                #     if train_loss < dev_best_loss:
+                #         dev_best_loss = train_loss
+                #         torch.save(self.state_dict(), '/Users/tanzhen/Desktop/pai_pytorch/saved_dict/wdl.ckpt')
+                #
+                #
+                #     eval_acc_list = []
+                #     eval_loss_list = []
+                #     self.valid_running_loss = 0.0
+                #     for eval_idx, (eval_data, eval_target) in enumerate(eval_loader):
+                #         acc, val_loss = self._validation_step(data, target, eval_idx)
+                #         eval_acc_list.append(acc['acc'])
+                #         eval_loss_list.append(val_loss)
+                #
+                #     writer.add_scalar("loss/eval", mean(eval_loss_list), batch_num)
+                #     writer.add_scalar("acc/eval", mean(eval_acc_list), batch_num)
+                #
+                #     # 输出指标
+                #     # msg = 'Iter: {0:>6},  Train Loss: {1:>5.2},  Train Acc: {2:>6.2%}'
 
 
-                if batch_num % 30 == 0:
-                    # msg = "Iter:{}  Train Loss:{}  acc:{}"
-                    writer.add_scalar("loss/train", train_loss, batch_num)
-                    writer.add_scalar("acc/train", acc['acc'], batch_num)
-
-                    if train_loss < dev_best_loss:
-                        dev_best_loss = train_loss
-                        torch.save(self.state_dict(), '/Users/tanzhen/Desktop/pai_pytorch/saved_dict/wdl.ckpt')
-
-
-                    eval_acc_list = []
-                    eval_loss_list = []
-                    self.valid_running_loss = 0.0
-                    for eval_idx, (eval_data, eval_target) in enumerate(eval_loader):
-                        acc, val_loss = self._validation_step(data, target, eval_idx)
-                        eval_acc_list.append(acc['acc'])
-                        eval_loss_list.append(val_loss)
-
-                    writer.add_scalar("loss/eval", mean(eval_loss_list), batch_num)
-                    writer.add_scalar("acc/eval", mean(eval_acc_list), batch_num)
-
-                    # 输出指标
-                    # msg = 'Iter: {0:>6},  Train Loss: {1:>5.2},  Train Acc: {2:>6.2%}'
-                    msg = 'Iter: {0:>6},  Train Loss: {1:>5.2},  Train Acc: {2:>6.2%},  Val Loss: {3:>5.2},  Val Acc: {4:>6.2%}'
-                    print(msg.format(batch_num, train_loss, acc['acc'], mean(eval_loss_list), mean(eval_acc_list)))
-
-
-                if self.lr_scheduler:
+                if self.lr_schedulers_dic:
                     self._lr_scheduler_step(step_location="on_batch_end")
-                self.callback_container.on_batch_end(batch=batch_idx)
-            epoch_logs["train_loss"] = train_loss
-            if acc is not None:
-                epoch_logs["train_acc"] = acc["acc"]
 
-            # eval step...
-            if epoch % validation_freq == (validation_freq - 1):
-                if eval_set is not None:
-
-                    eval_steps = len(eval_loader)
-                    self.valid_running_loss = 0.0
-                    with trange(eval_steps, disable=self.verbose != 1) as v:
-                        for i, (data, target) in zip(v, eval_loader):
-                            v.set_description("valid")
-                            acc, val_loss = self._validation_step(data, target, i)
-                            if acc is not None:
-                                v.set_postfix(metrics=acc, loss=val_loss)
-                            else:
-                                v.set_postfix(loss=np.sqrt(val_loss))
-                    epoch_logs["val_loss"] = val_loss
-                    if acc is not None:
-                        epoch_logs["val_acc"] = acc["acc"]
-
-            if self.lr_scheduler:
+            if self.lr_schedulers_dic:
                 self._lr_scheduler_step(step_location="on_epoch_end")
-            #  log and check if early_stop...
-            self.callback_container.on_epoch_end(epoch, epoch_logs)
-            if self.early_stop:
-                self.callback_container.on_train_end(epoch_logs)
-                break
-            self.callback_container.on_train_end(epoch_logs)
+            # if self.early_stop:
+            #     self.callback_container.on_train_end(epoch_logs)
+            #     break
+            # self.callback_container.on_train_end(epoch_logs)
 
         writer.close()
         self.train()
+
+
+    def _cal_binary_accuracy(self, y_pred: Tensor, y_true: Tensor) -> np.ndarray:
+        if self.method == "binary":
+            y_pred_round = y_pred.round()
+            correct_count = y_pred_round.eq(y_true.view(-1, 1)).float().sum().item()
+            total_count = len(y_pred)
+            accuracy = float(correct_count) / float(total_count)
+            return np.round(accuracy, 4)
+        else:
+            y_pred_round = y_pred.round()
+            correct_count = y_pred_round.eq(y_true.view(-1, 1)).float().sum().item()
+            total_count = len(y_pred)
+            accuracy = float(correct_count) / float(total_count)
+            return np.round(accuracy, 4)
+
+    def _cal_loss_and_backprop(self, y_pred, y_true):
+        loss = 0.0
+        if self.method == "binary":
+            loss = F.binary_cross_entropy(y_pred, y_true.view(-1, 1), weight=self.class_weight)
+        if self.method == "regression":
+            loss = F.mse_loss(y_pred, y_true.view(-1, 1))
+        if self.method == "multiclass":
+            loss = F.cross_entropy(y_pred, y_true, weight=self.class_weight)
+
+        # 求梯度
+        loss.backward()
+
+        # optimizer更新参数空间
+        for _, op in self.optimizer_dic.items():
+            op.step()
+
+        return loss
+
+    def _activation_fn(self, inp: Tensor) -> Tensor:
+        if self.method == "binary":
+            return torch.sigmoid(inp)
+        else:
+            # F.cross_entropy will apply logSoftmax to the preds in the case of 'multiclass'
+            return inp
+
+    # update learning_rate
+    def _lr_scheduler_step(self, step_location: str):
+        # CyclicLR 每个batch, 其他每个 epoch
+        # if self.cyclic:
+        if step_location == "on_batch_end":
+            for model_name, scheduler in self.lr_schedulers_dic.items():
+                if "cycl" in scheduler.__class__.__name__.lower():
+                    scheduler.step()
+        elif step_location == "on_epoch_end":
+            for model_name, scheduler in self.lr_schedulers_dic.items():
+                if "cycl" not in scheduler.__class__.__name__.lower():
+                    scheduler.step()
+
+    # test loss/accurate of validation data
+    def _test_validation_set(self, eval_loader):
+        self.eval()
+        loss_total = 0
+        predict_all = np.array([], dtype=int)
+        labels_all = np.array([], dtype=int)
+
+        with torch.no_grad():
+            for batch_idx, (data, target) in enumerate(eval_loader):
+                self.train()
+                X = {k: v.cuda() for k, v in data.items()} if use_cuda else data
+                y = target.float() if self.method != "multiclass" else target
+                y = y.cuda() if use_cuda else y
+
+                # 梯度置零
+                for _, op in self.optimizer_dic.items():
+                    op.zero_grad()
+
+                # 预测值
+                y_pred = self._activation_fn(self.forward(X))
+
+                # cal loss and accurate
+                train_loss = self._cal_loss_and_backprop(y_pred, y)
+                train_acc = self._cal_binary_accuracy(y_pred, y)
+
+
+
 
     def predict(
         self,
@@ -440,14 +500,6 @@ class WideDeep(nn.Module):
             cat_embed_dict[value] = embed_mtx[idx]
         return cat_embed_dict
 
-    def _activation_fn(self, inp: Tensor) -> Tensor:
-        if self.method == "binary":
-            return torch.sigmoid(inp)
-        else:
-            # F.cross_entropy will apply logSoftmax to the preds in the case
-            # of 'multiclass'
-            return inp
-
     def _loss_fn(self, y_pred: Tensor, y_true: Tensor) -> Tensor:  # type: ignore
         if self.with_focal_loss:
             return FocalLoss(self.alpha, self.gamma)(y_pred, y_true)
@@ -461,19 +513,7 @@ class WideDeep(nn.Module):
             return F.cross_entropy(y_pred, y_true, weight=self.class_weight)
 
 
-
-    def _warm_up(
-        self,
-        loader: DataLoader,
-        n_epochs: int,
-        max_lr: float,
-        deeptext_gradual: bool,
-        deeptext_layers: List[nn.Module],
-        deeptext_max_lr: float,
-        deepimage_gradual: bool,
-        deepimage_layers: List[nn.Module],
-        deepimage_max_lr: float,
-        routine: str = "felbo",
+    def _warm_up(self, loader: DataLoader, n_epochs: int, max_lr: float, deeptext_gradual: bool, deeptext_layers: List[nn.Module], deeptext_max_lr: float, deepimage_gradual: bool, deepimage_layers: List[nn.Module], deepimage_max_lr: float, routine: str = "felbo",
     ):
         r"""
         Simple wrappup to individually warm up model components
@@ -514,45 +554,6 @@ class WideDeep(nn.Module):
             else:
                 warmer.warm_all(self.deepimage, "deepimage", loader, n_epochs, max_lr)
 
-    def _lr_scheduler_step(self, step_location: str):
-        r"""
-        Function to execute the learning rate schedulers steps.
-        If the lr_scheduler is Cyclic (i.e. CyclicLR or OneCycleLR), the step
-        must happen after training each bach durig training. On the other
-        hand, if the  scheduler is not Cyclic, is expected to be called after
-        validation.
-
-        Parameters
-        ----------
-        step_location: Str
-            Indicates where to run the lr_scheduler step
-        """
-        if (
-            self.lr_scheduler.__class__.__name__ == "MultipleLRScheduler"
-            and self.cyclic
-        ):
-            if step_location == "on_batch_end":
-                for model_name, scheduler in self.lr_scheduler._schedulers.items():  # type: ignore
-                    if "cycl" in scheduler.__class__.__name__.lower():
-                        scheduler.step()  # type: ignore
-            elif step_location == "on_epoch_end":
-                for scheduler_name, scheduler in self.lr_scheduler._schedulers.items():  # type: ignore
-                    if "cycl" not in scheduler.__class__.__name__.lower():
-                        scheduler.step()  # type: ignore
-        elif self.cyclic:
-            if step_location == "on_batch_end":
-                self.lr_scheduler.step()  # type: ignore
-            else:
-                pass
-        elif self.lr_scheduler.__class__.__name__ == "MultipleLRScheduler":
-            if step_location == "on_epoch_end":
-                self.lr_scheduler.step()  # type: ignore
-            else:
-                pass
-        elif step_location == "on_epoch_end":
-            self.lr_scheduler.step()  # type: ignore
-        else:
-            pass
 
     def _training_step(self, data: Dict[str, Tensor], target: Tensor, batch_idx: int):
         self.train()
@@ -578,10 +579,12 @@ class WideDeep(nn.Module):
         else:
             return None, avg_loss, loss
 
+
     def _validation_step(self, data: Dict[str, Tensor], target: Tensor, batch_idx: int):
 
         self.eval()
         with torch.no_grad():
+
             X = {k: v.cuda() for k, v in data.items()} if use_cuda else data
             y = target.float() if self.method != "multiclass" else target
             y = y.cuda() if use_cuda else y

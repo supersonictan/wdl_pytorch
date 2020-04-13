@@ -17,7 +17,7 @@ def dense_layer(inp: int, out: int, p: float = 0.0, bn=False):
 
 
 class DeepDense(nn.Module):
-    def __init__(self, deep_column_idx, hidden_layers, batchnorm=True, dropout=None, embed_input=None, embed_p=0.0, continuous_cols=None):
+    def __init__(self, deep_column_idx, hidden_layers, batchnorm=False, dropout=None, embed_input=None, embed_p=0.0, continuous_cols=None):
         """
         :param deep_column_idx:         Dict[str, int]
         :param hidden_layers:           List[int]

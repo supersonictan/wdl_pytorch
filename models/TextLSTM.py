@@ -10,7 +10,6 @@ from sklearn import metrics
 import pickle as pkl
 
 
-PRE_TRAIN_WORD_EMBEDDING = torch.tensor(np.load('data/embedding_SougouNews.npz')["embeddings"].astype('float32'))
 WORD_EMBEDDING_DIM = 300
 HIDDEN_DIM = 64
 HIDDEN_LAYERS = 2
@@ -20,11 +19,13 @@ DROPOUT = 0.5
 
 # 创建模型
 class TextLSTM(nn.Module):
-    def __init__(self):
+    def __init__(self, pre_train_embed_path):
         super(TextLSTM, self).__init__()
         self.output_dim = HIDDEN_DIM * HIDDEN_LAYERS
 
         # 1. embedding
+        PRE_TRAIN_WORD_EMBEDDING = torch.tensor(np.load(pre_train_embed_path)["embeddings"].astype('float32'))
+
         self.lstm_word_embedding = nn.Embedding.from_pretrained(PRE_TRAIN_WORD_EMBEDDING, freeze=False)
 
         # 2. LSTM 以 word_embeddings 作为输入, 输出维度为 hidden_dim 的隐藏状态值
