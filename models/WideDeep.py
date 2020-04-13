@@ -1,4 +1,5 @@
 import warnings
+from sklearn import metrics
 
 import numpy as np
 import os
@@ -250,12 +251,16 @@ class WideDeep(nn.Module):
 
                 if batch_num % 100 == 0:
                     train_acc = self._cal_binary_accuracy(y_pred, y)
-                    writer.add_scalar("loss/train", train_loss.item(), batch_num)
-                    writer.add_scalar("acc/train", train_acc, batch_num)
+                    loss_valid, acc_valid = self._test_validation_set(eval_loader)
 
-                    # msg = 'Iter: {0:>6},  Train Loss: {1:>5.2},  Train Acc: {2:>6.2%},  Val Loss: {3:>5.2},  Val Acc: {4:>6.2%}'
-                    msg = 'Iter: {0:>6},  Train Loss: {1:>5.2},  Train Acc: {2:>6.2%}'
-                    print(msg.format(batch_num, train_loss.item(), train_acc))
+                    writer.add_scalar("loss/train", train_loss.item(), batch_num)
+                    writer.add_scalar("loss/eval", loss_valid.item(), batch_num)
+                    writer.add_scalar("acc/train", train_acc, batch_num)
+                    writer.add_scalar("acc/eval", acc_valid, batch_num)
+
+                    msg = 'Iter: {0:>6},  Train Loss: {1:>5.2},  Train Acc: {2:>6.2%},  Val Loss: {3:>5.2},  Val Acc: {4:>6.2%}'
+                    # msg = 'Iter: {0:>6},  Train Loss: {1:>5.2},  Train Acc: {2:>6.2%}'
+                    print(msg.format(batch_num, train_loss.item(), train_acc, loss_valid, acc_valid))
 
                 # ---------------OLD
                 # acc, train_loss, loss_tensors = self._training_step(data, target, batch_idx)
@@ -315,7 +320,7 @@ class WideDeep(nn.Module):
             accuracy = float(correct_count) / float(total_count)
             return np.round(accuracy, 4)
 
-    def _cal_loss_and_backprop(self, y_pred, y_true):
+    def _cal_loss_and_backprop(self, y_pred, y_true, train_mode=True):
         loss = 0.0
         if self.method == "binary":
             loss = F.binary_cross_entropy(y_pred, y_true.view(-1, 1), weight=self.class_weight)
@@ -324,12 +329,13 @@ class WideDeep(nn.Module):
         if self.method == "multiclass":
             loss = F.cross_entropy(y_pred, y_true, weight=self.class_weight)
 
-        # 求梯度
-        loss.backward()
+        if train_mode:
+            # 求梯度
+            loss.backward()
 
-        # optimizer更新参数空间
-        for _, op in self.optimizer_dic.items():
-            op.step()
+            # optimizer更新参数空间
+            for _, op in self.optimizer_dic.items():
+                op.step()
 
         return loss
 
@@ -357,38 +363,37 @@ class WideDeep(nn.Module):
     def _test_validation_set(self, eval_loader):
         self.eval()
         loss_total = 0
+        correct_count_total = 0.0
         predict_all = np.array([], dtype=int)
         labels_all = np.array([], dtype=int)
 
         with torch.no_grad():
             for batch_idx, (data, target) in enumerate(eval_loader):
-                self.train()
                 X = {k: v.cuda() for k, v in data.items()} if use_cuda else data
                 y = target.float() if self.method != "multiclass" else target
                 y = y.cuda() if use_cuda else y
 
-                # 梯度置零
-                for _, op in self.optimizer_dic.items():
-                    op.zero_grad()
-
                 # 预测值
                 y_pred = self._activation_fn(self.forward(X))
 
-                # cal loss and accurate
-                train_loss = self._cal_loss_and_backprop(y_pred, y)
-                train_acc = self._cal_binary_accuracy(y_pred, y)
+                loss = self._cal_loss_and_backprop(y_pred, y, train_mode=False)
+                loss_total += loss
+
+                y_pred_round = y_pred.round()
+                predic = y_pred_round.data.cpu().numpy()
+
+                labels = y.data.cpu().numpy()
+                labels_all = np.append(labels_all, labels)
+                predict_all = np.append(predict_all, predic)
+                # correct_count_total += y_pred_round.eq(y.view(-1, 1)).float().sum().item()
+
+        loss_valid = loss_total / len(eval_loader)
+        acc = metrics.accuracy_score(labels_all, predict_all)
+        return loss_valid, acc
 
 
 
-
-    def predict(
-        self,
-        X_wide: np.ndarray,
-        X_deep: np.ndarray,
-        X_text: Optional[np.ndarray] = None,
-        X_img: Optional[np.ndarray] = None,
-        X_test: Optional[Dict[str, np.ndarray]] = None,
-    ) -> np.ndarray:
+    def predict(self,X_wide: np.ndarray,X_deep: np.ndarray,X_text: Optional[np.ndarray] = None,X_img: Optional[np.ndarray] = None,X_test: Optional[Dict[str, np.ndarray]] = None) -> np.ndarray:
         r"""
         fit method that must run after calling 'compile'
 
@@ -425,14 +430,7 @@ class WideDeep(nn.Module):
             preds = np.vstack(preds_l)
             return np.argmax(preds, 1)
 
-    def predict_proba(
-        self,
-        X_wide: np.ndarray,
-        X_deep: np.ndarray,
-        X_text: Optional[np.ndarray] = None,
-        X_img: Optional[np.ndarray] = None,
-        X_test: Optional[Dict[str, np.ndarray]] = None,
-    ) -> np.ndarray:
+    def predict_proba(self,X_wide: np.ndarray,X_deep: np.ndarray,X_text: Optional[np.ndarray] = None,X_img: Optional[np.ndarray] = None,X_test: Optional[Dict[str, np.ndarray]] = None) -> np.ndarray:
         r"""
         Returns
         -------
