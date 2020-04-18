@@ -169,10 +169,8 @@ class WideDeep(nn.Module):
 
     # TODO: Metrics, EarlyStopping, ModelCheckpoint, EachModel-LR
     # TODO: DeepDense参数改为 batchnorm 会报错
-    def fit(self, X_wide=None, X_deep=None, X_text=None, X_img=None, X_train=None, X_val=None, val_split=None, target=None, n_epochs=1, validation_freq=1, batch_size=256,
-            summary_path='log/',
-        warm_up=False, warm_epochs=4, warm_max_lr=0.01,
-        warm_deeptext_gradual=False,warm_deeptext_max_lr=0.01,warm_deeptext_layers=None,warm_deepimage_gradual=False,warm_deepimage_max_lr=0.01,warm_deepimage_layers=None,warm_routine="howard"
+    def fit(self, X_wide=None, X_deep=None, X_text=None, X_img=None, X_train=None, X_val=None, val_split=None, target=None, n_epochs=1, validation_freq=1, batch_size=256, summary_path='log/',
+        warm_up=False, warm_epochs=4, warm_max_lr=0.01, warm_deeptext_gradual=False,warm_deeptext_max_lr=0.01,warm_deeptext_layers=None,warm_deepimage_gradual=False,warm_deepimage_max_lr=0.01,warm_deepimage_layers=None,warm_routine="howard"
     ):
         """
         :param X_wide:                              np.ndarray
