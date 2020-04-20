@@ -49,7 +49,7 @@ class WideDeep(nn.Module):
 
         if self.deephead is None:
             if head_layers is not None:
-                input_dim: int = self.deepdense.output_dim + self.deeptext.output_dim + self.deepimage.output_dim  # type:ignore
+                input_dim: int = self.deepdense.output_dim + self.deeptext.output_dim + self.deepimage.output_dim
                 head_layers = [input_dim] + head_layers
                 if not head_dropout:
                     head_dropout = [0.0] * (len(head_layers) - 1)
@@ -82,6 +82,7 @@ class WideDeep(nn.Module):
     def forward(self, X: Dict[str, Tensor]) -> Tensor:
         # Wide output: direct connection to the output neuron(s)
         out = self.wide(X["wide"])
+        # print('wide shape:{}'.format(out.shape))
 
         # Deep output: either connected directly to the output neuron(s) or passed through a head first
         if self.deephead:
@@ -95,7 +96,12 @@ class WideDeep(nn.Module):
         else:
             out.add_(self.deepdense(X["deepdense"]))
             if self.deeptext is not None:
-                out.add_(self.deeptext(X["deeptext"]))
+                # print('deepdense shape:{}'.format(out.shape))
+                out_text = self.deeptext(X["deeptext"])
+
+                # print('text shape:{}'.format(out_text.shape))
+
+                out.add_(out_text)
             if self.deepimage is not None:
                 out.add_(self.deepimage(X["deepimage"]))
             return out
@@ -247,7 +253,7 @@ class WideDeep(nn.Module):
                 # cal loss and accurate
                 train_loss = self._cal_loss_and_backprop(y_pred, y)
 
-                if batch_num % 100 == 0:
+                if batch_num % 10 == 0:
                     train_acc = self._cal_binary_accuracy(y_pred, y)
                     loss_valid, acc_valid = self._test_validation_set(eval_loader)
 

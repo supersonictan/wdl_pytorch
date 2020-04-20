@@ -70,6 +70,7 @@ class DeepDense(nn.Module):
 
         # the output_dim attribute will be used as input_dim when "merging" the models
         self.output_dim = hidden_layers[-1]
+        print("deep dense 维度：{}".format(self.output_dim))
 
     def forward(self, X: Tensor) -> Tensor:
         # [(education, 11, 32), ...]

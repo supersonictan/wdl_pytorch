@@ -2,6 +2,8 @@ import sys
 
 from models.DeepDense import DeepDense
 from models.TextLSTM import TextLSTM
+from models.Transformer import Transformer
+from models.TransformerEncoder import TransformerEncoder
 from models.Wide import Wide
 
 from models.WideDeep import WideDeep
@@ -17,7 +19,7 @@ import torch
 
 embedding_path = '/Users/tanzhen/Desktop/pai_pytorch/data/embedding_SougouNews.npz'
 traindata_path = '/Users/tanzhen/Desktop/pai_pytorch/data/adult_train_bak.csv'
-summary_path = '/Users/tanzhen/Desktop/code/wdl_pytorch/log'
+summary_path = '/Users/tanzhen/Desktop/code/wdl_pytorch/log/transformer'
 
 
 if __name__ == '__main__':
@@ -66,7 +68,8 @@ if __name__ == '__main__':
     # Build model
     wide = Wide(wide_dim=X_wide.shape[1], output_dim=1)
     deepdense = DeepDense(hidden_layers=[64, 32], dropout=[0.2, 0.2], deep_column_idx=prepare_deep.deep_column_idx, embed_input=prepare_deep.emb_col_val_dim_tuple, continuous_cols=continuous_cols)
-    lstm = TextLSTM(embedding_path)
+    # lstm = TextLSTM(embedding_path)
+    lstm = TransformerEncoder(embedding_path)
     wide_deep_model = WideDeep(wide=wide, deepdense=deepdense, deeptext=lstm)
 
     # 1.设定 optimizer ==> 2.Init 子 model 各层种参数 ==> 3.StepLR
