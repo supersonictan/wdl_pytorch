@@ -9,7 +9,8 @@ from models.Wide import Wide
 from models.WideDeep import WideDeep
 from optim.Initializer import KaimingNormal, XavierNormal
 from optim.radam import RAdam
-from preprocessing.Preprocessor import WidePreprocessor, DeepPreprocessor, DeepTextPreprocessor
+from preprocessing.Preprocessor import WidePreprocessor, DeepPreprocessor, DeepTextPreprocessor, \
+    MultiDeepTextPreprocessor
 
 sys.path.append('.')
 
@@ -18,27 +19,29 @@ import pandas as pd
 import torch
 
 embedding_path = '/Users/tanzhen/Desktop/pai_pytorch/data/embedding_SougouNews.npz'
-traindata_path = '/Users/tanzhen/Desktop/pai_pytorch/data/adult_train.csv'
-summary_path = '/Users/tanzhen/Desktop/code/wdl_pytorch/log/transformer'
+traindata_path = '/Users/tanzhen/Desktop/code/odps/bin/badquery_example.csv'
+summary_path = '/Users/tanzhen/Desktop/code/wdl_pytorch/log/badquery'
+vocab_path = '/Users/tanzhen/Desktop/pai_pytorch/data/vocab.pkl'
 
 
 if __name__ == '__main__':
     df = pd.read_csv(traindata_path)
+
     df.columns = [c.replace("-", "_") for c in df.columns]
-    df["age_buckets"] = pd.cut(df.age, bins=[16, 25, 30, 35, 40, 45, 50, 55, 60, 91], labels=np.arange(9))
-    df["income_label"] = (df["income"].apply(lambda x: ">50K" in x)).astype(int)
-    df.drop("income", axis=1, inplace=True)
+    print(df.columns)
+    df["term_num_bucket"] = pd.cut(df.term_num, bins=[0, 1, 3, 4, 6, 15], labels=np.arange(5))
+    df["bounce_rate_bucket"] = pd.cut(df.bounce_rate, bins=[-1, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 1.1], labels=np.arange(9))
     print(df.head())
 
     # wide 列名
-    wide_cols = ["age_buckets", "education", "relationship", "workclass", "occupation", "native_country", "gender"]
-    crossed_cols = [("education", "occupation"), ("native_country", "occupation")]
+    wide_cols = ["term_num_bucket", "bounce_rate_bucket", "is_ne"]
+    crossed_cols = [("term_num_bucket", "is_ne"), ("bounce_rate_bucket", "term_num_bucket")]
     # deep 列名
-    cat_embed_cols = [("education", 10), ("relationship", 8), ("workclass", 10), ("occupation", 10), ("native_country", 10)]
-    continuous_cols = ["age", "hours_per_week"]
+    cat_embed_cols = [("main_category", 8)]
+    continuous_cols = ["uv", "bounce_rate", "term_num"]
     # text 列名
-    text_cols = 'desc'
-    target = "income_label"
+    text_cols = ['text_feature']
+    target = "label"
     target = df[target].values
 
     # Wide 输入
@@ -58,9 +61,10 @@ if __name__ == '__main__':
     """
 
     # lstm 输入
-    prepare_text = DeepTextPreprocessor(text_cols_list=text_cols, pad_size=16, vocab_path='/Users/tanzhen/Desktop/pai_pytorch/data/vocab.pkl')
+    term_dic_path = '/Users/tanzhen/Desktop/code/odps/bin/term_dic.csv'
+    prepare_text = MultiDeepTextPreprocessor(text_cols_list=text_cols, pad_size=20, term_dic_path=term_dic_path)
     X_text = prepare_text.fit_transform(df)
-    print(X_text)
+    # print(X_text)
     """
     [[  66  440 4761 4761 4761 4761 4761 4761 4761 4761 4761 4761 4761 4761 4761 4761]
      [   5  440 4761 4761 4761 4761 4761 4761 4761 4761 4761 4761 4761 4761 4761 4761]]
@@ -89,8 +93,6 @@ if __name__ == '__main__':
     wide_deep_model.compile(method='binary', optimizers_dic=optimizers, lr_schedulers_dic=schedulers, initializers_dic=initializers)
 
     wide_deep_model.fit(X_wide=X_wide, X_deep=X_deep, X_text=X_text, target=target, n_epochs=10, batch_size=128,val_split=0.2, summary_path=summary_path)
-
-
 
 
 

@@ -55,6 +55,79 @@ def label_encoder(df_inp:pd.DataFrame, cols:Optional[List[str]]=None, val_to_idx
 
 
 
+def gen_vocab_dic(df_inp:pd.DataFrame, text_col):
+
+    df_new = df_inp.copy()[text_col].str.split(" ", expand=True).stack()
+    val_types = dict()
+
+    for c in text_col:
+        val_types[c] = df_new[c].unique()
+
+    # tmp_list = df_inp.copy()[text_col].values.tolist()
+    # print(type(tmp_list))
+    # word_uniq = []
+    # for i in range(0, len(tmp_list)):
+    #     word_uniq = word_uniq + tmp_list[i].split(" ")
+    #
+    # vocab_dic = {k: v for v, k in enumerate(word_uniq)}
+
+    print(val_types)
+
+
+
+
+
+UNK, PAD = '<UNK>', '<PAD>'  # 未知字，padding符号
+class MultiDeepTextPreprocessor(BasePreprocessor):
+    def __init__(self, text_cols_list:List[str] = None, pad_size:int=6, term_dic_path=None):
+        super(MultiDeepTextPreprocessor, self).__init__()
+        self.text_cols_list = text_cols_list
+        self.pad_size = pad_size
+        self.term_dic_path = term_dic_path
+
+    def fit(self, df: pd.DataFrame) -> BasePreprocessor:
+        df = pd.read_csv(self.term_dic_path, names=['term', 'id'])
+        self.vocab = dict(zip(list(df.term), list(df.id)))
+        print("Finished Load term dic size:{}".format(len(self.vocab)))
+
+        return self
+
+
+    def transform(self, df: pd.DataFrame) -> np.ndarray:
+        tokenizer = lambda x: [y for y in x]  # char-level
+        def trans_text2id(content):
+            content = content[0]
+            token_list = tokenizer(content)
+            # print(token_list)
+            seq_len = len(token_list)
+
+            if len(token_list) < self.pad_size:
+                token_list.extend([PAD] * (self.pad_size - len(token_list)))
+            else:
+                token_list = token_list[:self.pad_size]
+                seq_len = self.pad_size
+
+            # word to id
+            word2id_list = [self.vocab.get(w, self.vocab.get(UNK)) for w in token_list]
+
+            return word2id_list
+
+        df_list = df.copy()[self.text_cols_list].values.tolist()
+        df_list_new = [trans_text2id(x) for x in df_list]
+
+        return np.array(df_list_new)
+
+    def fit_transform(self, df: pd.DataFrame) -> np.ndarray:
+        return self.fit(df).transform(df)
+
+
+
+
+
+
+
+
+
 
 
 UNK, PAD = '<UNK>', '<PAD>'  # 未知字，padding符号
@@ -74,7 +147,7 @@ class DeepTextPreprocessor(BasePreprocessor):
 
 
     def transform(self, df: pd.DataFrame) -> np.ndarray:
-        tokenizer = lambda x: [y for y in x]  # char-level
+        tokenizer = lambda x: [y for y in x.split(' ')]  # char-level
         def trans_text2id(content):
             content = content[0]
             token_list = tokenizer(content)

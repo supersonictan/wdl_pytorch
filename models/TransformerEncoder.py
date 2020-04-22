@@ -6,7 +6,7 @@ from torch.autograd import Variable
 import math
 
 embedding_dim = 300
-need_pretrain_embedding = True
+need_pretrain_embedding = False
 pad_size = 16
 dropout = 0.5
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -32,7 +32,7 @@ class TransformerEncoder(nn.Module):
         if need_pretrain_embedding:
             self.embedding = nn.Embedding.from_pretrained(PRE_TRAIN_WORD_EMBEDDING, freeze=False)
         else:
-            pass
+            self.embedding = nn.Embedding(1105553, embedding_dim)
             # TODO: init embedding
 
         self.position = PositionalEncoding()
